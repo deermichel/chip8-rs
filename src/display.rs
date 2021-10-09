@@ -4,22 +4,19 @@ use crossterm::{QueueableCommand, ExecutableCommand, style, cursor, terminal};
 // display constants
 const PIXEL_CHAR: &str = "██";
 const PIXEL_WIDTH: usize = 2;
-const SCREEN_WIDTH: usize = 64;
-const SCREEN_HEIGHT: usize = 32;
+pub const SCREEN_WIDTH: usize = 64;
+pub const SCREEN_HEIGHT: usize = 32;
 
 // console display
 pub struct Display {
-    framebuffer: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
     stdout: Stdout,
 }
 
+// console display impl
 impl Display {
     // constructor
     pub fn new(stdout: Stdout) -> Self {
-        Self {
-            framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
-            stdout,
-        }
+        Self { stdout }
     }
 
     // prepare console
@@ -32,7 +29,7 @@ impl Display {
     }
 
     // render framebuffer to console
-    pub fn render(&mut self) {
+    pub fn render(&mut self, framebuffer: &[u8]) {
         // clear screen
         self.stdout.queue(terminal::Clear(terminal::ClearType::All)).unwrap();
 
@@ -43,7 +40,7 @@ impl Display {
         // render pixels
         for y in 0..SCREEN_HEIGHT {
             for x in 0..SCREEN_WIDTH {
-                if self.framebuffer[y * SCREEN_WIDTH + x] > 0 {
+                if framebuffer[y * SCREEN_WIDTH + x] > 0 {
                     self.stdout
                         .queue(cursor::MoveTo(x_offset + (x * PIXEL_WIDTH) as u16, y_offset + y as u16)).unwrap()
                         .queue(style::Print(PIXEL_CHAR)).unwrap();
