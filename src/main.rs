@@ -22,8 +22,9 @@ fn main() {
 
     // prepare emulation
     let mut display = Display::new(stdout());
-    display.init_console();
+    // display.init_console();
+    processor.emulate();
 
     // cleanup
-    display.restore_console();
+    // display.restore_console();
 }
