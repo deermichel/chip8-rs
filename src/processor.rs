@@ -1,4 +1,6 @@
-use crate::display::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::display::{Display, SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::keypad::{Keypad, Input};
+use std::time::{Duration, Instant};
 use std::panic;
 use rand::Rng;
 
@@ -11,7 +13,10 @@ const VRAM_SIZE: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
 // chip8 processor
 pub struct Processor {
     delay_timer: u8,            // delay timer
+    display: Display,           // display adapter
+    halt: bool,                 // stop emulation
     i: usize,                   // 12-bit index register
+    last_tick: Instant,         // last timer update
     keypad: [u8; 16],           // hex keyboard state
     pc: usize,                  // program counter
     ram: [u8; RAM_SIZE],        // main memory (4096 bytes)
@@ -26,10 +31,13 @@ pub struct Processor {
 // processor impl
 impl Processor {
     // constructor
-    pub fn new() -> Self {
+    pub fn new(display: Display) -> Self {
         Self {
             delay_timer: 0,
+            display,
+            halt: false,
             i: 0,
+            last_tick: Instant::now(),
             keypad: [0; 16],
             pc: BASE_ADDR,
             ram: [0; RAM_SIZE],
@@ -56,15 +64,40 @@ impl Processor {
 
     // emulation loop
     pub fn emulate(&mut self) {
-        while self.pc < RAM_SIZE - 1 {
+        self.display.init_console();
+        while !self.halt && self.pc < RAM_SIZE {
+            // execute
             let opcode = self.fetch_instruction();
             self.process_opcode(opcode);
             self.pc += 2;
+
+            // render
+            if self.vram_dirty {
+                self.vram_dirty = false;
+                self.display.render(&self.vram);
+            }
+
+            // fetch keys
+            self.keypad = [0; 16];
+            if let Some(input) = Keypad::get_input() {
+                match input {
+                    Input::Key(k) => self.keypad[k as usize] = 1,
+                    Input::Quit => self.halt = true,
+                }
+            }
+
+            // update timers
+            if self.last_tick.elapsed() > Duration::from_millis(16) {
+                self.last_tick = Instant::now();
+                if self.delay_timer > 0 { self.delay_timer -= 1; }
+                if self.sound_timer > 0 { self.sound_timer -= 1; }
+            }
         }
+        self.display.restore_console();
     }
 
     // print memory dump
-    pub fn print_memory_dump(&self) {
+    pub fn _print_memory_dump(&self) {
         for i in 0..RAM_SIZE {
             if i % 32 == 0 { print!("{:#05X}  |  ", i); }
             print!("{:02X}  ", self.ram[i]);
@@ -212,13 +245,19 @@ impl Processor {
             (0xF, _, 0x0, 0x7) => self.v[x] = self.delay_timer,
 
             // FX0A [keyop] WAIT until key pressed, store in VX
-            // TODO
+            (0xF, _, 0x0, 0xA) => {
+                let input = Keypad::wait_for_input();
+                match input {
+                    Input::Key(k) => self.v[x] = k,
+                    Input::Quit => self.halt = true,
+                }
+            },
 
             // FX15 [timer] SET delay timer = VX
             (0xF, _, 0x1, 0x5) => self.delay_timer = self.v[x],
 
             // FX18 [sound] SET sound timer = VX
-            (0xF, _, 0x1, 0x8) => self.sound_timer = self.v[x],
+            // (0xF, _, 0x1, 0x8) => self.sound_timer = self.v[x],
 
             // FX1E [mem] SET I += VX
             (0xF, _, 0x1, 0xE) => self.i += self.v[x] as usize,
