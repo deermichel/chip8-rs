@@ -1,5 +1,6 @@
 use crate::display::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use std::panic;
+use rand::Rng;
 
 // processor constants
 const BASE_ADDR: usize = 0x200;
@@ -87,10 +88,10 @@ impl Processor {
         let d = opcode & 0x000F;
         match (a, b, c, d) {
             // 00E0 [disp] CLS
-            (0, 0, 0xE, 0) => self.vram = [0; VRAM_SIZE],
+            (0x0, 0x0, 0xE, 0x0) => self.vram = [0; VRAM_SIZE],
 
             // 00EE [flow] RET
-            (0, 0, 0xE, 0xE) => {
+            (0x0, 0x0, 0xE, 0xE) => {
                 if self.sp == 0 { panic!("stack underflow"); }
                 self.sp -= 1;
                 self.pc = self.stack[self.sp];
@@ -107,23 +108,101 @@ impl Processor {
                 self.pc = (nnn - 2) as usize; // account for +2 in each execution cycle
             },
 
-            // 3XNN [cond] SKIP if Vx == NN
+            // 3XNN [cond] SKIP VX == NN
             (0x3, _, _, _) => if self.v[x] == nn { self.pc += 2 },
 
-            // 4XNN [cond] SKIP if Vx != NN
+            // 4XNN [cond] SKIP VX != NN
             (0x4, _, _, _) => if self.v[x] != nn { self.pc += 2 },
 
-            // 5XY0 [cond] SKIP if Vx == Vy
-            (0x5, _, _, 0) => if self.v[x] == self.v[y] { self.pc += 2 },
+            // 5XY0 [cond] SKIP VX == VY
+            (0x5, _, _, 0x0) => if self.v[x] == self.v[y] { self.pc += 2 },
 
-            // 6XNN [const] SET Vx = NN
+            // 6XNN [const] LDI VX = NN
             (0x6, _, _, _) => self.v[x] = nn,
 
-            // 7XNN [const] ADD Vx += NN
+            // 7XNN [const] LDA VX += NN
             (0x7, _, _, _) => self.v[x] += nn,
 
-            // 8XY0 [assig] SET Vx = Vy
-            (0x8, _, _, 0) => self.v[x] = self.v[y],
+            // 8XY0 [assig] SET VX = VY
+            (0x8, _, _, 0x0) => self.v[x] = self.v[y],
+
+            // 8XY1 [bitop] OR VX = VX | VY
+            (0x8, _, _, 0x1) => self.v[x] |= self.v[y],
+
+            // 8XY2 [bitop] AND VX = VX & VY
+            (0x8, _, _, 0x2) => self.v[x] &= self.v[y],
+
+            // 8XY3 [bitop] XOR VX = VX ^ VY
+            (0x8, _, _, 0x3) => self.v[x] ^= self.v[y],
+
+            // 8XY4 [math] ADD VX += VY
+            (0x8, _, _, 0x4) => {
+                self.v[0xF] = if self.v[x] > 0xF - self.v[y] { 1 } else { 0 }; // carry
+                self.v[x] += self.v[y];
+            },
+
+            // 8XY5 [math] SUB VX -= VY
+            (0x8, _, _, 0x5) => {
+                self.v[0xF] = if self.v[x] < self.v[y] { 0 } else { 1 }; // borrow
+                self.v[x] -= self.v[y];
+            },
+
+            // 8XY6 [bitop] SHR VX >>= 1
+            (0x8, _, _, 0x6) => {
+                self.v[0xF] = self.v[x] & 0x01;
+                self.v[x] >>= 1;
+            },
+
+            // 8XY7 [math] SUB VX = VY - VX
+            (0x8, _, _, 0x7) => {
+                self.v[0xF] = if self.v[y] < self.v[x] { 0 } else { 1 }; // borrow
+                self.v[x] = self.v[y] - self.v[x];
+            },
+
+            // 8XYE [bitop] SHL VX <<= 1
+            (0x8, _, _, 0xE) => {
+                self.v[0xF] = self.v[x] & 0x80;
+                self.v[x] <<= 1;
+            },
+
+            // 9XY0 [cond] SKIP VX != VY
+            (0x9, _, _, 0x0) => if self.v[x] != self.v[y] { self.pc += 2 },
+
+            // ANNN [mem] SET I = NNN
+            (0xA, _, _, _) => self.i = nnn,
+
+            // BNNN [flow] JUMP V0 + NNN
+            (0xB, _, _, _) => self.pc = (nnn + (self.v[0x0] as u16) - 2) as usize, // account for +2 in each execution cycle
+
+            // CXNN [rand] RND VX = rand() & NN
+            (0xC, _, _, _) => self.v[x] = rand::thread_rng().gen::<u8>() & nn,
+
+            // DXYN [disp] DRAW at (VX, VY) with height N from memory location I
+            // TODO
+
+            // EX9E [keyop] SKIP key VX pressed
+            // TODO
+
+            // EXA1 [keyop] SKIP key VX not pressed
+            // TODO
+
+            // FX07 [timer] SET VX = delay timer
+            (0xF, _, 0x0, 0x7) => self.v[x] = self.delay_timer,
+
+            // FX0A [keyop] WAIT until key pressed, store in VX
+            // TODO
+
+            // FX15 [timer] SET delay timer = VX
+            (0xF, _, 0x1, 0x5) => self.delay_timer = self.v[x],
+
+            // FX18 [sound] SET sound timer = VX
+            // TODO
+
+            // FX1E [mem] SET I += VX
+            (0xF, _, 0x1, 0xE) => self.i += self.v[x] as u16,
+
+            // FX29 [mem] SET I = sprite(VX)
+            // (0xF, _, 0x2, 0x9) =>
 
             // [misc] UNSUPPORTED
             (_, _, _, _) => panic!("unsupported opcode at {:#05X}: {:02X}", self.pc, opcode),
