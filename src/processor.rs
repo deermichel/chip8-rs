@@ -231,19 +231,19 @@ impl Processor {
 
             // DXYN [disp] DRAW at (VX, VY) with height N from memory location I
             (0xD, _, _, _) => {
-                self.v[0xF] = 0; // reset xor flag
+                self.v[0xF] = 0; // reset flipped flag
                 for y_offset in 0..n as usize {
                     let row = self.ram[self.i + y_offset];
                     for x_offset in 0..8 {
                         let pixel = (row >> (7 - x_offset)) & 0x1;
-                        let pos = (y_offset + y) * SCREEN_WIDTH + x_offset + x;
-                        if pixel != self.vram[pos] {
-                            self.v[0xF] = 1; // set xor flag
-                            self.vram_dirty = true;
+                        let pos = (y_offset + (self.v[y] as usize)) * SCREEN_WIDTH + x_offset + (self.v[x] as usize);
+                        if self.vram[pos] == 1 && pixel == 1 {
+                            self.v[0xF] = 1; // set flipped flag
                         }
-                        self.vram[pos] = pixel;
+                        self.vram[pos] ^= pixel;
                     }
                 }
+                self.vram_dirty = true;
             },
 
             // EX9E [keyop] SKIP key VX pressed
@@ -274,7 +274,7 @@ impl Processor {
             (0xF, _, 0x1, 0xE) => self.i = self.i.wrapping_add(self.v[x] as usize),
 
             // FX29 [mem] SET I = sprite(VX)
-            (0xF, _, 0x2, 0x9) => self.i = FONTS_ADDR + (self.v[x] as usize),
+            (0xF, _, 0x2, 0x9) => self.i = FONTS_ADDR + (self.v[x] as usize) * 5,
 
             // FX33 [mem] BCD I = VX
             (0xF, _, 0x3, 0x3) => {
@@ -299,7 +299,7 @@ impl Processor {
             },
 
             // [misc] UNSUPPORTED
-            (_, _, _, _) => panic!("unsupported opcode at {:#05X}: {:#04X}", self.pc, opcode),
+            (_, _, _, _) => panic!("unsupported opcode at {:#05X}: {:#06X}", self.pc, opcode),
         }
     }
 }
