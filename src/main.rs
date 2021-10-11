@@ -1,7 +1,9 @@
 mod display;
+mod keypad;
 mod processor;
 
 use crate::display::Display;
+use crate::keypad::Keypad;
 use crate::processor::Processor;
 use std::io::{stdout, Read};
 use std::{thread, time};
@@ -20,11 +22,13 @@ fn main() {
 
     // processor.print_memory_dump();
 
+
     // prepare emulation
     let mut display = Display::new(stdout());
     // display.init_console();
-    processor.emulate();
+    let mut keypad = Keypad::wait_for_key();
+    // processor.emulate();
 
     // cleanup
-    // display.restore_console();
+    display.restore_console();
 }

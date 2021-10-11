@@ -4,7 +4,6 @@ use rand::Rng;
 
 // processor constants
 const BASE_ADDR: usize = 0x200;
-const NUM_REGISTERS: usize = 16;
 const RAM_SIZE: usize = 4096;
 const STACK_SIZE: usize = 16;
 const VRAM_SIZE: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
@@ -12,13 +11,16 @@ const VRAM_SIZE: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
 // chip8 processor
 pub struct Processor {
     delay_timer: u8,            // delay timer
-    i: u16,                     // 12-bit index register
+    i: usize,                   // 12-bit index register
+    keypad: [u8; 16],           // hex keyboard state
     pc: usize,                  // program counter
     ram: [u8; RAM_SIZE],        // main memory (4096 bytes)
-    stack: [usize; STACK_SIZE], // stack (16 12-bit addresses)
+    sound_timer: u8,            // sound timer
     sp: usize,                  // stack pointer
-    v: [u8; NUM_REGISTERS],     // 16 8-bit registers
+    stack: [usize; STACK_SIZE], // stack (16 12-bit addresses)
+    v: [u8; 16],                // 16 8-bit registers
     vram: [u8; VRAM_SIZE],      // framebuffer (64x32)
+    vram_dirty: bool,           // render on next frame
 }
 
 // processor impl
@@ -28,12 +30,15 @@ impl Processor {
         Self {
             delay_timer: 0,
             i: 0,
+            keypad: [0; 16],
             pc: BASE_ADDR,
             ram: [0; RAM_SIZE],
-            stack: [0; STACK_SIZE],
+            sound_timer: 0,
             sp: 0,
-            v: [0; NUM_REGISTERS],
+            stack: [0; STACK_SIZE],
+            v: [0; 16],
             vram: [0; VRAM_SIZE],
+            vram_dirty: false,
         }
     }
 
@@ -88,7 +93,10 @@ impl Processor {
         let d = opcode & 0x000F;
         match (a, b, c, d) {
             // 00E0 [disp] CLS
-            (0x0, 0x0, 0xE, 0x0) => self.vram = [0; VRAM_SIZE],
+            (0x0, 0x0, 0xE, 0x0) => {
+                self.vram = [0; VRAM_SIZE];
+                self.vram_dirty = true;
+            },
 
             // 00EE [flow] RET
             (0x0, 0x0, 0xE, 0xE) => {
@@ -169,7 +177,7 @@ impl Processor {
             (0x9, _, _, 0x0) => if self.v[x] != self.v[y] { self.pc += 2 },
 
             // ANNN [mem] SET I = NNN
-            (0xA, _, _, _) => self.i = nnn,
+            (0xA, _, _, _) => self.i = nnn as usize,
 
             // BNNN [flow] JUMP V0 + NNN
             (0xB, _, _, _) => self.pc = (nnn + (self.v[0x0] as u16) - 2) as usize, // account for +2 in each execution cycle
@@ -178,13 +186,27 @@ impl Processor {
             (0xC, _, _, _) => self.v[x] = rand::thread_rng().gen::<u8>() & nn,
 
             // DXYN [disp] DRAW at (VX, VY) with height N from memory location I
-            // TODO
+            (0xD, _, _, _) => {
+                self.v[0xF] = 0; // reset xor flag
+                for y_offset in 0..n as usize {
+                    let row = self.ram[self.i + y_offset];
+                    for x_offset in 0..8 {
+                        let pixel = (row >> (7 - x_offset)) & 0x1;
+                        let pos = (y_offset + y) * SCREEN_WIDTH + x_offset + x;
+                        if pixel != self.vram[pos] {
+                            self.v[0xF] = 1; // set xor flag
+                            self.vram_dirty = true;
+                        }
+                        self.vram[pos] = pixel;
+                    }
+                }
+            },
 
             // EX9E [keyop] SKIP key VX pressed
-            // TODO
+            (0xE, _, 0x9, 0xE) => if self.keypad[self.v[x] as usize] > 0 { self.pc += 2 },
 
             // EXA1 [keyop] SKIP key VX not pressed
-            // TODO
+            (0xE, _, 0xA, 0x1) => if self.keypad[self.v[x] as usize] == 0 { self.pc += 2 },
 
             // FX07 [timer] SET VX = delay timer
             (0xF, _, 0x0, 0x7) => self.v[x] = self.delay_timer,
@@ -196,13 +218,35 @@ impl Processor {
             (0xF, _, 0x1, 0x5) => self.delay_timer = self.v[x],
 
             // FX18 [sound] SET sound timer = VX
-            // TODO
+            (0xF, _, 0x1, 0x8) => self.sound_timer = self.v[x],
 
             // FX1E [mem] SET I += VX
-            (0xF, _, 0x1, 0xE) => self.i += self.v[x] as u16,
+            (0xF, _, 0x1, 0xE) => self.i += self.v[x] as usize,
 
             // FX29 [mem] SET I = sprite(VX)
             // (0xF, _, 0x2, 0x9) =>
+
+            // FX33 [mem] BCD I = VX
+            (0xF, _, 0x3, 0x3) => {
+                let num = self.v[x];
+                self.ram[self.i] = num / 100;
+                self.ram[self.i + 1] = (num % 100) / 10;
+                self.ram[self.i + 2] = num % 10;
+            },
+
+            // FX55 [mem] DREG dump V0 to VX to I
+            (0xF, _, 0x5, 0x5) => {
+                for reg in 0..=x {
+                    self.ram[self.i + reg] = self.v[reg];
+                }
+            },
+
+            // FX65 [mem] LREG load I into V0 to VX
+            (0xF, _, 0x6, 0x5) => {
+                for reg in 0..=x {
+                    self.v[reg] = self.ram[self.i + reg];
+                }
+            },
 
             // [misc] UNSUPPORTED
             (_, _, _, _) => panic!("unsupported opcode at {:#05X}: {:02X}", self.pc, opcode),
