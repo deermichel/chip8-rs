@@ -1,11 +1,13 @@
 use crate::display::{Display, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::keypad::{Keypad, Input};
+use crate::font::FONT_SET;
 use std::time::{Duration, Instant};
 use std::panic;
 use rand::Rng;
 
 // processor constants
 const BASE_ADDR: usize = 0x200;
+const FONTS_ADDR: usize = 0x050;
 const RAM_SIZE: usize = 4096;
 const STACK_SIZE: usize = 16;
 const VRAM_SIZE: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
@@ -32,6 +34,13 @@ pub struct Processor {
 impl Processor {
     // constructor
     pub fn new(display: Display) -> Self {
+        // preload font set
+        let mut ram = [0; RAM_SIZE];
+        for i in 0..FONT_SET.len() {
+            ram[i + FONTS_ADDR] = FONT_SET[i];
+        }
+
+        // init
         Self {
             delay_timer: 0,
             display,
@@ -40,7 +49,7 @@ impl Processor {
             last_tick: Instant::now(),
             keypad: [0; 16],
             pc: BASE_ADDR,
-            ram: [0; RAM_SIZE],
+            ram,
             sound_timer: 0,
             sp: 0,
             stack: [0; STACK_SIZE],
@@ -162,7 +171,7 @@ impl Processor {
             (0x6, _, _, _) => self.v[x] = nn,
 
             // 7XNN [const] LDA VX += NN
-            (0x7, _, _, _) => self.v[x] += nn,
+            (0x7, _, _, _) => self.v[x] = self.v[x].wrapping_add(nn),
 
             // 8XY0 [assig] SET VX = VY
             (0x8, _, _, 0x0) => self.v[x] = self.v[y],
@@ -178,14 +187,16 @@ impl Processor {
 
             // 8XY4 [math] ADD VX += VY
             (0x8, _, _, 0x4) => {
-                self.v[0xF] = if self.v[x] > 0xF - self.v[y] { 1 } else { 0 }; // carry
-                self.v[x] += self.v[y];
+                let (value, carry) = self.v[x].overflowing_add(self.v[y]);
+                self.v[x] = value;
+                self.v[0xF] = if carry { 1 } else { 0 };
             },
 
             // 8XY5 [math] SUB VX -= VY
             (0x8, _, _, 0x5) => {
-                self.v[0xF] = if self.v[x] < self.v[y] { 0 } else { 1 }; // borrow
-                self.v[x] -= self.v[y];
+                let (value, borrow) = self.v[x].overflowing_sub(self.v[y]);
+                self.v[x] = value;
+                self.v[0xF] = if borrow { 0 } else { 1 };
             },
 
             // 8XY6 [bitop] SHR VX >>= 1
@@ -257,13 +268,13 @@ impl Processor {
             (0xF, _, 0x1, 0x5) => self.delay_timer = self.v[x],
 
             // FX18 [sound] SET sound timer = VX
-            // (0xF, _, 0x1, 0x8) => self.sound_timer = self.v[x],
+            (0xF, _, 0x1, 0x8) => self.sound_timer = self.v[x],
 
             // FX1E [mem] SET I += VX
-            (0xF, _, 0x1, 0xE) => self.i += self.v[x] as usize,
+            (0xF, _, 0x1, 0xE) => self.i = self.i.wrapping_add(self.v[x] as usize),
 
             // FX29 [mem] SET I = sprite(VX)
-            // (0xF, _, 0x2, 0x9) =>
+            (0xF, _, 0x2, 0x9) => self.i = FONTS_ADDR + (self.v[x] as usize),
 
             // FX33 [mem] BCD I = VX
             (0xF, _, 0x3, 0x3) => {
@@ -288,7 +299,7 @@ impl Processor {
             },
 
             // [misc] UNSUPPORTED
-            (_, _, _, _) => panic!("unsupported opcode at {:#05X}: {:02X}", self.pc, opcode),
+            (_, _, _, _) => panic!("unsupported opcode at {:#05X}: {:#04X}", self.pc, opcode),
         }
     }
 }

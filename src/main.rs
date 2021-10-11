@@ -1,4 +1,5 @@
 mod display;
+mod font;
 mod keypad;
 mod processor;
 
@@ -16,7 +17,7 @@ fn main() {
     let mut processor = Processor::new(display);
 
     // load rom
-    let path = "IBM.rom";
+    let path = "PONG.rom";
     let mut rom_file = File::open(path).unwrap();
     let mut rom_data = Vec::new();
     let _rom_size = rom_file.read_to_end(&mut rom_data).unwrap();
