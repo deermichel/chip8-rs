@@ -1,4 +1,6 @@
 use crate::display::{Display, SCREEN_HEIGHT, SCREEN_WIDTH};
+use std::io::{Write, Stdout, stdout};
+use crossterm::{QueueableCommand, ExecutableCommand, style, cursor, terminal};
 use crate::keypad::{Keypad, Input};
 use crate::font::FONT_SET;
 use std::time::{Duration, Instant};
@@ -207,13 +209,14 @@ impl Processor {
 
             // 8XY7 [math] SUB VX = VY - VX
             (0x8, _, _, 0x7) => {
-                self.v[0xF] = if self.v[y] < self.v[x] { 0 } else { 1 }; // borrow
-                self.v[x] = self.v[y] - self.v[x];
+                let (value, borrow) = self.v[y].overflowing_sub(self.v[x]);
+                self.v[x] = value;
+                self.v[0xF] = if borrow { 0 } else { 1 };
             },
 
             // 8XYE [bitop] SHL VX <<= 1
             (0x8, _, _, 0xE) => {
-                self.v[0xF] = self.v[x] & 0x80;
+                self.v[0xF] = (self.v[x] & 0x80) >> 7;
                 self.v[x] <<= 1;
             },
 
@@ -233,13 +236,13 @@ impl Processor {
             (0xD, _, _, _) => {
                 self.v[0xF] = 0; // reset flipped flag
                 for y_offset in 0..n as usize {
+                    let y_pos = (y_offset + self.v[y] as usize) % SCREEN_HEIGHT;
                     let row = self.ram[self.i + y_offset];
                     for x_offset in 0..8 {
                         let pixel = (row >> (7 - x_offset)) & 0x1;
-                        let pos = (y_offset + (self.v[y] as usize)) * SCREEN_WIDTH + x_offset + (self.v[x] as usize);
-                        if self.vram[pos] == 1 && pixel == 1 {
-                            self.v[0xF] = 1; // set flipped flag
-                        }
+                        let x_pos = (x_offset + self.v[x] as usize) % SCREEN_WIDTH;
+                        let pos = y_pos * SCREEN_WIDTH + x_pos;
+                        self.v[0xF] |= self.vram[pos] & pixel; // set flipped flag
                         self.vram[pos] ^= pixel;
                     }
                 }
